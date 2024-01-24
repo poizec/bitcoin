@@ -69,6 +69,7 @@ FUZZ_TARGET(utxo_snapshot, .init = initialize_chain)
                 height++;
             }
         }
+        assert(outfile.fclose() == 0);
     }
 
     const auto ActivateFuzzedSnapshot{[&] {

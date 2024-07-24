@@ -307,7 +307,7 @@ BOOST_AUTO_TEST_CASE(parse)
     {
         std::string s_12{"0000000000000000000000000000000000000000000000000000000000000012"};
         BOOST_CHECK_EQUAL(uint256S("12\0").GetHex(), s_12);
-        BOOST_CHECK_EQUAL(uint256S(std::string{"12\0", 3}).GetHex(), s_12);
+        BOOST_CHECK_EQUAL(uint256S(std::string_view{"12\0", 3}).GetHex(), s_12);
         BOOST_CHECK_EQUAL(uint256S("0x12").GetHex(), s_12);
         BOOST_CHECK_EQUAL(uint256S(" 0x12").GetHex(), s_12);
         BOOST_CHECK_EQUAL(uint256S(" 12").GetHex(), s_12);

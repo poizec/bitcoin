@@ -53,15 +53,22 @@ public:
         std::fill(m_data.begin(), m_data.end(), 0);
     }
 
+    // Big-endian ordering, unlike CompareTo() for arith_*-variants.
     constexpr int Compare(const base_blob& other) const { return std::memcmp(m_data.data(), other.m_data.data(), WIDTH); }
 
     friend constexpr bool operator==(const base_blob& a, const base_blob& b) { return a.Compare(b) == 0; }
     friend constexpr bool operator!=(const base_blob& a, const base_blob& b) { return a.Compare(b) != 0; }
     friend constexpr bool operator<(const base_blob& a, const base_blob& b) { return a.Compare(b) < 0; }
 
-    // Hex string representations are little-endian.
+    // Hex string representations are big-endian.
     std::string GetHex() const;
-    /** Unlike FromHex this accepts any invalid input, thus it is fragile and deprecated */
+    /** Unlike FromHex this accepts any invalid input, thus it is fragile and deprecated
+     *
+     * Hex strings that don't specify all bytes of the internal array will be
+     * treated as setting the less significant end of the byte range.
+     * Hex strings specifying too many bytes will have their most significant
+     * bytes (the beginning of the string) narrowed away.
+     */
     void SetHexDeprecated(std::string_view str);
     std::string ToString() const;
 
@@ -134,7 +141,7 @@ public:
     static const uint256 ONE;
 };
 
-/* uint256 from std::string_view, treated as little-endian.
+/* uint256 from std::string_view, treated as big-endian hex string.
  * DEPRECATED. Unlike FromHex this accepts any invalid input, thus it is fragile and deprecated!
  */
 inline uint256 uint256S(std::string_view str)

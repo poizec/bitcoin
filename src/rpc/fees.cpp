@@ -35,7 +35,7 @@ static RPCHelpMan estimatesmartfee()
         "for which the estimate is valid. Uses virtual transaction size as defined\n"
         "in BIP 141 (witness data is discounted).\n",
         {
-            {"conf_target", RPCArg::Type::NUM, RPCArg::Optional::NO, "Confirmation target in blocks (1 - 1008)"},
+            {"conf_target", RPCArg::Type::NUM, RPCArg::Optional::NO, "Confirmation target in blocks (2 - 1008)"},
             {"estimate_mode", RPCArg::Type::STR, RPCArg::Default{"economical"}, "The fee estimate mode.\n"
               + FeeModesDetail()},
         },
@@ -43,15 +43,16 @@ static RPCHelpMan estimatesmartfee()
             RPCResult::Type::OBJ, "", "",
             {
                 {RPCResult::Type::NUM, "feerate", /*optional=*/true, "estimate fee rate in " + CURRENCY_UNIT + "/kvB (only present if no errors were encountered)"},
-                {RPCResult::Type::ARR, "errors", /*optional=*/true, "Errors encountered during processing (if there are any)",
+                {RPCResult::Type::ARR, "errors", /*optional=*/true, "Errors encountered during processing. An error is returned if not enough transactions\n"
+                                                                    "and blocks have been tracked to make an estimate for any number of blocks.",
                     {
                         {RPCResult::Type::STR, "", "error"},
                     }},
-                {RPCResult::Type::NUM, "blocks", "block number where estimate was found\n"
-                "The request target will be clamped between 2 and the highest target\n"
-                "fee estimation is able to return based on how long it has been running.\n"
-                "An error is returned if not enough transactions and blocks\n"
-                "have been observed to make an estimate for any number of blocks."},
+                {RPCResult::Type::NUM, "blocks", "The returned fee rate estimate will likely result in the\n"
+                "transaction starting to confirm within the returned \"blocks\" value.\n"
+                "If an estimate for the exact conf_target cannot be provided,\n"
+                "the nearest possible target for which an estimate can be given will be returned.\n"
+                "Fee estimation is able to return based on how long it has been running."},
         }},
         RPCExamples{
             HelpExampleCli("estimatesmartfee", "6") +

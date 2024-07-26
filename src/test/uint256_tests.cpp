@@ -328,6 +328,15 @@ BOOST_AUTO_TEST_CASE(parse)
         BOOST_CHECK_EQUAL(uint256S(" 0x").GetHex(), s_0);
         BOOST_CHECK_EQUAL(uint256S(" ").GetHex(), s_0);
     }
+    {
+        // Make sure FromHex respects string_view length and stops reading at
+        // end of the substring.
+        auto chars_68{"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123"};
+        std::string_view chars_64{chars_68, 64};
+        BOOST_CHECK(!uint256::FromHex(std::string_view(chars_68, 63))); // too short
+        BOOST_CHECK_EQUAL(uint256::FromHex(std::string_view(chars_68, 64)).value().ToString(), chars_64);
+        BOOST_CHECK(!uint256::FromHex(std::string_view(chars_68, 65))); // too long
+    }
 }
 
 BOOST_AUTO_TEST_CASE( check_ONE )

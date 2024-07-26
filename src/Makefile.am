@@ -1063,7 +1063,8 @@ endif
 
 libbitcoin_ipc_mpgen_input = \
   ipc/capnp/echo.capnp \
-  ipc/capnp/init.capnp
+  ipc/capnp/init.capnp \
+  ipc/capnp/mining.capnp
 EXTRA_DIST += $(libbitcoin_ipc_mpgen_input)
 %.capnp:
 
@@ -1077,6 +1078,9 @@ libbitcoin_ipc_a_SOURCES = \
   ipc/capnp/common-types.h \
   ipc/capnp/context.h \
   ipc/capnp/init-types.h \
+  ipc/capnp/mining.cpp \
+  ipc/capnp/mining.h \
+  ipc/capnp/mining-types.h \
   ipc/capnp/protocol.cpp \
   ipc/capnp/protocol.h \
   ipc/context.h \

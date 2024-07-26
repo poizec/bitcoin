@@ -165,6 +165,23 @@ std::pair<std::vector<ClusterIndex>, bool> SimpleLinearize(const DepGraph<SetTyp
     return {std::move(linearization), optimal};
 }
 
+/** Stitch connected components together in a DepGraph, guaranteeing its corresponding cluster is connected. */
+template<typename BS>
+void MakeConnected(DepGraph<BS>& depgraph)
+{
+    auto todo = BS::Fill(depgraph.TxCount());
+    auto comp = depgraph.FindConnectedComponent(todo);
+    Assume(depgraph.IsConnected(comp));
+    todo -= comp;
+    while (todo.Any()) {
+        auto nextcomp = depgraph.FindConnectedComponent(todo);
+        Assume(depgraph.IsConnected(nextcomp));
+        depgraph.AddDependency(comp.Last(), nextcomp.First());
+        todo -= nextcomp;
+        comp = nextcomp;
+    }
+}
+
 /** Given a dependency graph, and a todo set, read a topological subset of todo from reader. */
 template<typename SetType>
 SetType ReadTopologicalSet(const DepGraph<SetType>& depgraph, const SetType& todo, SpanReader& reader)
@@ -294,6 +311,95 @@ FUZZ_TARGET(clusterlin_depgraph_serialization)
     assert(IsAcyclic(depgraph));
 }
 
+FUZZ_TARGET(clusterlin_components)
+{
+    // Verify the behavior of DepGraphs's FindConnectedComponent and IsConnected functions.
+
+    // Construct a depgraph.
+    SpanReader reader(buffer);
+    DepGraph<TestBitSet> depgraph;
+    try {
+        reader >> Using<DepGraphFormatter>(depgraph);
+    } catch (const std::ios_base::failure&) {}
+
+    TestBitSet todo = TestBitSet::Fill(depgraph.TxCount());
+    while (todo.Any()) {
+        // Find a connected component inside todo.
+        auto component = depgraph.FindConnectedComponent(todo);
+
+        // The component must be a subset of todo and non-empty.
+        assert(component.IsSubsetOf(todo));
+        assert(component.Any());
+
+        // If todo is the entire graph, and the entire graph is connected, then the component must
+        // be the entire graph.
+        if (todo == TestBitSet::Fill(depgraph.TxCount())) {
+            assert((component == todo) == depgraph.IsConnected());
+        }
+
+        // If subset is connected, then component must match subset.
+        assert((component == todo) == depgraph.IsConnected(todo));
+
+        // The component cannot have any ancestors or descendants outside of component but in todo.
+        for (auto i : component) {
+            assert((depgraph.Ancestors(i) & todo).IsSubsetOf(component));
+            assert((depgraph.Descendants(i) & todo).IsSubsetOf(component));
+        }
+
+        // Starting from any component element, we must be able to reach every element.
+        for (auto i : component) {
+            // Start with just i as reachable.
+            TestBitSet reachable = TestBitSet::Singleton(i);
+            // Add in-todo descendants and ancestors to reachable until it does not change anymore.
+            while (true) {
+                TestBitSet new_reachable = reachable;
+                for (auto j : new_reachable) {
+                    new_reachable |= depgraph.Ancestors(j) & todo;
+                    new_reachable |= depgraph.Descendants(j) & todo;
+                }
+                if (new_reachable == reachable) break;
+                reachable = new_reachable;
+            }
+            // Verify that the result is the entire component.
+            assert(component == reachable);
+        }
+
+        // Construct an arbitrary subset of todo.
+        uint64_t subset_bits{0};
+        try {
+            reader >> VARINT(subset_bits);
+        } catch (const std::ios_base::failure&) {}
+        TestBitSet subset;
+        for (ClusterIndex i = 0; i < depgraph.TxCount(); ++i) {
+            if (todo[i]) {
+                if (subset_bits & 1) subset.Set(i);
+                subset_bits >>= 1;
+            }
+        }
+        // Which must be non-empty.
+        if (subset.None()) subset = TestBitSet::Singleton(todo.First());
+        // Remove it from todo.
+        todo -= subset;
+    }
+
+    // No components can be found in an empty subset.
+    assert(depgraph.FindConnectedComponent(todo).None());
+}
+
+FUZZ_TARGET(clusterlin_make_connected)
+{
+    // Verify that MakeConnected makes graphs connected.
+
+    SpanReader reader(buffer);
+    DepGraph<TestBitSet> depgraph;
+    try {
+        reader >> Using<DepGraphFormatter>(depgraph);
+    } catch (const std::ios_base::failure&) {}
+    MakeConnected(depgraph);
+    SanityCheck(depgraph);
+    assert(depgraph.IsConnected());
+}
+
 FUZZ_TARGET(clusterlin_chunking)
 {
     // Verify the correctness of the ChunkLinearization function.
@@ -352,11 +458,13 @@ FUZZ_TARGET(clusterlin_ancestor_finder)
     while (todo.Any()) {
         // Call the ancestor finder's FindCandidateSet for what remains of the graph.
         assert(!anc_finder.AllDone());
+        assert(todo.Count() == anc_finder.NumRemaining());
         auto best_anc = anc_finder.FindCandidateSet();
         // Sanity check the result.
         assert(best_anc.transactions.Any());
         assert(best_anc.transactions.IsSubsetOf(todo));
         assert(depgraph.FeeRate(best_anc.transactions) == best_anc.feerate);
+        assert(depgraph.IsConnected(best_anc.transactions));
         // Check that it is topologically valid.
         for (auto i : best_anc.transactions) {
             assert((depgraph.Ancestors(i) & todo).IsSubsetOf(best_anc.transactions));
@@ -382,6 +490,7 @@ FUZZ_TARGET(clusterlin_ancestor_finder)
         anc_finder.MarkDone(del_set);
     }
     assert(anc_finder.AllDone());
+    assert(anc_finder.NumRemaining() == 0);
 }
 
 static constexpr auto MAX_SIMPLE_ITERATIONS = 300000;
@@ -392,13 +501,17 @@ FUZZ_TARGET(clusterlin_search_finder)
     // and comparing with the results from SimpleCandidateFinder, ExhaustiveCandidateFinder, and
     // AncestorCandidateFinder.
 
-    // Retrieve an RNG seed and a depgraph from the fuzz input.
+    // Retrieve an RNG seed, a depgraph, and whether to make it connected, from the fuzz input.
     SpanReader reader(buffer);
     DepGraph<TestBitSet> depgraph;
     uint64_t rng_seed{0};
+    uint8_t make_connected{1};
     try {
-        reader >> Using<DepGraphFormatter>(depgraph) >> rng_seed;
+        reader >> Using<DepGraphFormatter>(depgraph) >> rng_seed >> make_connected;
     } catch (const std::ios_base::failure&) {}
+    // The most complicated graphs are connected ones (other ones just split up). Optionally force
+    // the graph to be connected.
+    if (make_connected) MakeConnected(depgraph);
 
     // Instantiate ALL the candidate finders.
     SearchCandidateFinder src_finder(depgraph, rng_seed);
@@ -412,6 +525,7 @@ FUZZ_TARGET(clusterlin_search_finder)
         assert(!smp_finder.AllDone());
         assert(!exh_finder.AllDone());
         assert(!anc_finder.AllDone());
+        assert(anc_finder.NumRemaining() == todo.Count());
 
         // For each iteration, read an iteration count limit from the fuzz input.
         uint64_t max_iterations = 1;
@@ -437,12 +551,23 @@ FUZZ_TARGET(clusterlin_search_finder)
             assert(found.transactions.IsSupersetOf(depgraph.Ancestors(i) & todo));
         }
 
-        // At most 2^N-1 iterations can be required: the number of non-empty subsets a graph with N
-        // transactions has.
-        assert(iterations_done <= ((uint64_t{1} << todo.Count()) - 1));
+        // At most 2^(N-1) iterations can be required: the maximum number of topological subsets a
+        // (connected) cluster with N transactions can have. Even when the cluster is no longer
+        // connected after removing certain transactions, this holds, because the connected
+        // components are searched separately.
+        assert(iterations_done <= (uint64_t{1} << (todo.Count() - 1)));
+        // Additionally, test that no more than sqrt(2^N)+1 iterations are required. This is just
+        // an empirical bound that seems to hold, without proof. Still, add a test for it so we
+        // can learn about counterexamples if they exist.
+        if (iterations_done >= 1 && todo.Count() <= 63) {
+            Assume((iterations_done - 1) * (iterations_done - 1) <= uint64_t{1} << todo.Count());
+        }
 
         // Perform quality checks only if SearchCandidateFinder claims an optimal result.
         if (iterations_done < max_iterations) {
+            // Optimal sets are always connected.
+            assert(depgraph.IsConnected(found.transactions));
+
             // Compare with SimpleCandidateFinder.
             auto [simple, simple_iters] = smp_finder.FindCandidateSet(MAX_SIMPLE_ITERATIONS);
             assert(found.feerate >= simple.feerate);
@@ -483,6 +608,7 @@ FUZZ_TARGET(clusterlin_search_finder)
     assert(smp_finder.AllDone());
     assert(exh_finder.AllDone());
     assert(anc_finder.AllDone());
+    assert(anc_finder.NumRemaining() == 0);
 }
 
 FUZZ_TARGET(clusterlin_linearization_chunking)
@@ -596,7 +722,7 @@ FUZZ_TARGET(clusterlin_linearization_chunking)
         }
         todo -= done;
         chunking.MarkDone(done);
-        subset = SetInfo(depgraph, subset.transactions - done);
+        subset = subset.Remove(depgraph, done);
     }
 
     assert(chunking.NumChunksLeft() == 0);
@@ -606,14 +732,19 @@ FUZZ_TARGET(clusterlin_linearize)
 {
     // Verify the behavior of Linearize().
 
-    // Retrieve an RNG seed, an iteration count, and a depgraph from the fuzz input.
+    // Retrieve an RNG seed, an iteration count, a depgraph, and whether to make it connected from
+    // the fuzz input.
     SpanReader reader(buffer);
     DepGraph<TestBitSet> depgraph;
     uint64_t rng_seed{0};
     uint64_t iter_count{0};
+    uint8_t make_connected{1};
     try {
-        reader >> VARINT(iter_count) >> Using<DepGraphFormatter>(depgraph) >> rng_seed;
+        reader >> VARINT(iter_count) >> Using<DepGraphFormatter>(depgraph) >> rng_seed >> make_connected;
     } catch (const std::ios_base::failure&) {}
+    // The most complicated graphs are connected ones (other ones just split up). Optionally force
+    // the graph to be connected.
+    if (make_connected) MakeConnected(depgraph);
 
     // Optionally construct an old linearization for it.
     std::vector<ClusterIndex> old_linearization;
@@ -642,11 +773,18 @@ FUZZ_TARGET(clusterlin_linearize)
     }
 
     // If the iteration count is sufficiently high, an optimal linearization must be found.
-    // Each linearization step can use up to 2^k iterations, with steps k=1..n. That sum is
-    // 2 * (2^n - 1)
+    // Each linearization step can use up to 2^(k-1) iterations, with steps k=1..n. That sum is
+    // 2^n - 1.
     const uint64_t n = depgraph.TxCount();
-    if (n <= 18 && iter_count > 2U * ((uint64_t{1} << n) - 1U)) {
+    if (n <= 19 && iter_count > (uint64_t{1} << n)) {
         assert(optimal);
+    }
+    // Additionally, if the assumption of sqrt(2^k)+1 iterations per step holds, the maximum number
+    // of iterations is also bounded by (2 + sqrt(2)) * (sqrt(2^n) - 1) + n, which is less than
+    // (2 + sqrt(2)) * sqrt(2^n) + n. Subtracting n and squaring gives
+    // (6 + 4 * sqrt(2)) * 2^n < 12 * 2^n.
+    if (n <= 35 && iter_count > n && (iter_count - n) * (iter_count - n) >= uint64_t{12} << n) {
+        Assume(optimal);
     }
 
     // If Linearize claims optimal result, run quality tests.

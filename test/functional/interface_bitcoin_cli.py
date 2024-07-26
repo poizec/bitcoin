@@ -381,6 +381,10 @@ class TestBitcoinCli(BitcoinTestFramework):
         assert_raises_process_error(1, "Could not connect to the server", self.nodes[0].cli('-rpcwait', '-rpcwaittimeout=5').echo)
         assert_greater_than_or_equal(time.time(), start_time + 5)
 
+        self.log.info("Test that only one of -addrinfo, -generate, -getinfo, -netinfo may be specified at a time")
+        assert_raises_process_error(1, "Only one of -getinfo, -netinfo may be specified", self.nodes[0].cli('-getinfo', '-netinfo').send_cli)
+        assert_raises_process_error(1, "Only one of -addrinfo, -generate, -getinfo, -netinfo", self.nodes[0].cli('-addrinfo', '-getinfo', '-netinfo', '-generate').send_cli)
+
 
 if __name__ == '__main__':
     TestBitcoinCli().main()

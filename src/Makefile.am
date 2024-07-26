@@ -303,6 +303,8 @@ BITCOIN_CORE_H = \
   util/bytevectorhash.h \
   util/chaintype.h \
   util/check.h \
+  util/date/date.h \
+  util/date/date_parse.h \
   util/epochguard.h \
   util/exception.h \
   util/fastrange.h \

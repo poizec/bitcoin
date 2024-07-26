@@ -218,6 +218,7 @@ public:
     friend inline bool operator==(const base_uint& a, uint64_t b) { return a.EqualTo(b); }
     friend inline bool operator!=(const base_uint& a, uint64_t b) { return !a.EqualTo(b); }
 
+    // Hex string representations are big-endian.
     std::string GetHex() const;
     std::string ToString() const;
 
